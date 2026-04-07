@@ -9,10 +9,9 @@ from torchvision.models.detection.ssd import SSD, SSDHead, DefaultBoxGenerator
 from torchvision.models.vgg import vgg16, VGG16_Weights
 import time
 from torchvision import transforms as T
-from torch.cuda.amp import GradScaler, autocast  # For Mixed Precision
 
 
-# --- 1. CUSTOM TRANSFORMS FOR DETECTION ---
+# --- 1. CUSTOM TRANSFORMS ---
 class DetectionCompose:
     def __init__(self, transforms): self.transforms = transforms
 
@@ -87,8 +86,8 @@ class XMLDataset(torch.utils.data.Dataset):
 
 # --- 3. SETTINGS ---
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-BATCH_SIZE = 1  # CRITICAL: Keep at 1 for 4GB VRAM
-ACCUMULATION_STEPS = 4  # Simulates Batch Size 4
+BATCH_SIZE = 1  # Keep 1 for 4GB VRAM
+ACCUMULATION_STEPS = 4
 EPOCHS = 50
 
 
@@ -105,7 +104,7 @@ def get_transform(train):
 def collate_fn(batch): return tuple(zip(*batch))
 
 
-# Data Loaders
+# Paths remain exactly as they were in your folder structure
 train_dataset = XMLDataset(root='dataset/master_train', transforms=get_transform(train=True))
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 
@@ -113,47 +112,37 @@ val_dataset = XMLDataset(root='dataset/master_valid', transforms=get_transform(t
 val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
 
 
-# --- 4. STABLE SSD512 MODEL CONSTRUCTION (FIXED) ---
+# --- 4. SSD512 MODEL CONSTRUCTION ---
 def create_ssd512(num_classes):
-    # 1. Base VGG16 features
     backbone_vgg = vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features
-
-    # 2. Stable Slicing: Manually take the first 30 layers
     backbone = nn.Sequential(*list(backbone_vgg)[:30])
 
-    # 3. Anchor Generator for 512px (7 feature maps)
     anchor_generator = DefaultBoxGenerator(
         [[2], [2, 3], [2, 3], [2, 3], [2, 3], [2], [2]],
         scales=[0.04, 0.1, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06],
         steps=[8, 16, 32, 64, 128, 256, 512]
     )
 
-    # 4. Head for 7 feature maps
     in_channels = [512, 1024, 512, 256, 256, 256, 256]
     num_anchors = [4, 6, 6, 6, 6, 4, 4]
     head = SSDHead(in_channels, num_anchors, num_classes)
 
-    # 5. Assemble (ADDED num_classes=num_classes here to fix the error)
-    model = SSD(
-        backbone=backbone,
-        anchor_generator=anchor_generator,
-        size=(512, 512),
-        num_classes=num_classes,  # <--- THIS LINE WAS MISSING
-        head=head
-    )
-    return model
+    # Assembly with correct num_classes argument
+    return SSD(backbone=backbone, anchor_generator=anchor_generator, size=(512, 512), num_classes=num_classes,
+               head=head)
 
 
 model = create_ssd512(num_classes=5).to(DEVICE)
 
 # --- 5. SAFETY-OPTIMIZED TRAINING LOOP ---
-# 1. Lower Learning Rate (0.0001 is much safer for SSD512)
+# Reduced Learning Rate (0.0001) for stability
 optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
 scaler = torch.amp.GradScaler('cuda')
 
 print("-" * 40)
-print(f"GTX 1650 SAFETY MODE | SSD512 | LR: 0.0001")
+print(f"GTX 1650 SAFETY RESTART | SSD512 | Device: {DEVICE}")
+print(f"LR: 0.0001 | Training on master_train...")
 print("-" * 40)
 
 start_full_train = time.time()
@@ -172,20 +161,20 @@ for epoch in range(EPOCHS):
         images = [images[idx].to(DEVICE) for idx in valid_indices]
         targets = [{k: v.to(DEVICE) for k, v in targets[idx].items()} for idx in valid_indices]
 
+        # Stable AMP syntax
         with torch.amp.autocast('cuda'):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
             losses = losses / ACCUMULATION_STEPS
 
-            # --- SAFETY CHECK: Skip if Loss is NaN or Inf ---
+            # NaN/Inf Check
         if not torch.isfinite(losses):
-            print(f"WARNING: Non-finite loss detected at iteration {i}. Skipping...")
             continue
 
         scaler.scale(losses).backward()
 
         if (i + 1) % ACCUMULATION_STEPS == 0:
-            # 2. GRADIENT CLIPPING (The "Safety Belt")
+            # Gradient Clipping (Safety Cap)
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
 
@@ -205,8 +194,8 @@ for epoch in range(EPOCHS):
             v_imgs = [val_images[idx].to(DEVICE) for idx in v_valid]
             v_targs = [{k: v.to(DEVICE) for k, v in val_targets[idx].items()} for idx in v_valid]
 
-            with autocast():
-                model.train()  # Necessary to get loss dict from torchvision
+            with torch.amp.autocast('cuda'):
+                model.train()
                 v_loss_dict = model(v_imgs, v_targs)
                 model.eval()
                 v_losses = sum(loss for loss in v_loss_dict.values())
@@ -222,6 +211,6 @@ for epoch in range(EPOCHS):
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
         torch.save(model.state_dict(), "malaysian_ssd512_allinone.pth")
-        print(f"*** NEW BEST MODEL SAVED! ***")
+        print(f"*** BEST MODEL SAVED! ***")
 
 print(f"FINISHED! Total Time: {(time.time() - start_full_train) / 60:.2f} mins")
