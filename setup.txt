@@ -1,0 +1,8 @@
+# Create the environment with the specific Python version
+conda create -n malaysian_ssd512 python=3.11 -y
+conda activate malaysian_ssd512
+
+# Install the deep learning stack
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install paddleocr paddlepaddle-gpu
+pip install opencv-python Pillow pillow-heif numpy

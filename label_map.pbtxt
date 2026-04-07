@@ -1,0 +1,16 @@
+item {
+    id: 1
+    name: 'plate'
+}
+item {
+    id: 2
+    name: 'car'
+}
+item {
+    id: 3
+    name: 'logo'
+}
+item {
+    id: 4
+    name: 'model_badge'
+}
