@@ -146,14 +146,14 @@ def create_ssd512(num_classes):
 
 model = create_ssd512(num_classes=5).to(DEVICE)
 
-# --- 5. TRAINING LOOP WITH MIXED PRECISION (AMP) ---
-optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=0.0005)
+# --- 5. SAFETY-OPTIMIZED TRAINING LOOP ---
+# 1. Lower Learning Rate (0.0001 is much safer for SSD512)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
-scaler = GradScaler()  # Scaler for float16 math
+scaler = torch.amp.GradScaler('cuda')
 
 print("-" * 40)
-print(f"GTX 1650 OPTIMIZED | SSD512 ALL-IN-ONE | Device: {DEVICE}")
-print(f"Epochs: {EPOCHS} | Virtual Batch Size: {BATCH_SIZE * ACCUMULATION_STEPS}")
+print(f"GTX 1650 SAFETY MODE | SSD512 | LR: 0.0001")
 print("-" * 40)
 
 start_full_train = time.time()
@@ -172,16 +172,23 @@ for epoch in range(EPOCHS):
         images = [images[idx].to(DEVICE) for idx in valid_indices]
         targets = [{k: v.to(DEVICE) for k, v in targets[idx].items()} for idx in valid_indices]
 
-        # Use Autocast for Mixed Precision (Saves VRAM)
-        with autocast():
+        with torch.amp.autocast('cuda'):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
             losses = losses / ACCUMULATION_STEPS
 
+            # --- SAFETY CHECK: Skip if Loss is NaN or Inf ---
+        if not torch.isfinite(losses):
+            print(f"WARNING: Non-finite loss detected at iteration {i}. Skipping...")
+            continue
+
         scaler.scale(losses).backward()
 
-        # Gradient Accumulation
         if (i + 1) % ACCUMULATION_STEPS == 0:
+            # 2. GRADIENT CLIPPING (The "Safety Belt")
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
+
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
