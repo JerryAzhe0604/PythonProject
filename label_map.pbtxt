@@ -8,9 +8,33 @@ item {
 }
 item {
     id: 3
-    name: 'logo'
+    name: 'logo_perodua'
 }
 item {
     id: 4
-    name: 'model_badge'
+    name: 'logo_proton'
+}
+item {
+    id: 5
+    name: 'logo_honda'
+}
+item {
+    id: 6
+    name: 'logo_toyota'
+}
+item {
+    id: 7
+    name: 'logo_mercedes'
+}
+item {
+    id: 8
+    name: 'logo_bmw'
+}
+item {
+    id: 9
+    name: 'logo_nissan'
+}
+item {
+    id: 10
+    name: 'logo_others'
 }
