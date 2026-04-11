@@ -59,23 +59,25 @@ class XMLDataset(torch.utils.data.Dataset):
     def __init__(self, root, transforms=None):
         self.root = root
         self.transforms = transforms
+        # This list finds all your images
         self.imgs = [os.path.join(r, file) for r, d, f in os.walk(root) for file in f if file.endswith('.jpg')]
+
         self.label_map = {
             'plate': 1, 'car': 2, 'logo_perodua': 3, 'logo_proton': 4,
             'logo_honda': 5, 'logo_toyota': 6, 'logo_mercedes': 7,
             'logo_bmw': 8, 'logo_nissan': 9, 'logo_others': 10
         }
 
+    # 1. This tells the AI HOW to get one image
     def __getitem__(self, idx):
         img_path = self.imgs[idx]
         xml_path = img_path.replace('.jpg', '.xml')
         img = Image.open(img_path).convert("RGB")
         img = ImageOps.autocontrast(img)
 
-        tree = ET.parse(xml_path)
+        tree = ET.parse(xml_path);
         root = tree.getroot()
         boxes, labels = [], []
-
         for obj in root.findall('object'):
             name = obj.find('name').text.lower().strip()
             if name in self.label_map:
@@ -86,25 +88,24 @@ class XMLDataset(torch.utils.data.Dataset):
                     boxes.append([xmin, ymin, xmax, ymax])
                     labels.append(self.label_map[name])
 
-        # --- THE FIX ---
-        # reshape(-1, 4) ensures the tensor is [N, 4] even if N is 0
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         labels = torch.as_tensor(labels, dtype=torch.int64)
-
         target = {"boxes": boxes, "labels": labels}
 
         w, h = img.size
         img = img.resize((512, 512))
-
-        # Only scale if boxes exist to avoid math on empty tensors
         if boxes.shape[0] > 0:
             target["boxes"][:, [0, 2]] *= (512.0 / w)
             target["boxes"][:, [1, 3]] *= (512.0 / h)
 
         img = T.ToTensor()(img)
-        if self.transforms:
-            img, target = self.transforms(img, target)
+        if self.transforms: img, target = self.transforms(img, target)
         return img, target
+
+    # 2. THIS IS THE PART YOU ARE MISSING
+    # It tells the DataLoader how many images are in the folder
+    def __len__(self):
+        return len(self.imgs)
 
 
 # ==========================================
