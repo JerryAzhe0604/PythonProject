@@ -6,3 +6,14 @@ conda activate malaysian_ssd512
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install paddleocr paddlepaddle-gpu
 pip install opencv-python Pillow pillow-heif numpy
+
+python==3.11.*
+torch==2.2.0
+torchvision==0.17.0
+numpy==1.24.3
+Pillow==10.0.0
+opencv-python==4.8.0.76
+paddleocr>=2.7.0
+
+pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121
+pip install numpy==1.24.3 Pillow==10.0.0 opencv-python paddleocr
