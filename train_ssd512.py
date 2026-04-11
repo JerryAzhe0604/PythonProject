@@ -72,9 +72,10 @@ class XMLDataset(torch.utils.data.Dataset):
         img = Image.open(img_path).convert("RGB")
         img = ImageOps.autocontrast(img)
 
-        tree = ET.parse(xml_path);
+        tree = ET.parse(xml_path)
         root = tree.getroot()
         boxes, labels = [], []
+
         for obj in root.findall('object'):
             name = obj.find('name').text.lower().strip()
             if name in self.label_map:
@@ -85,21 +86,25 @@ class XMLDataset(torch.utils.data.Dataset):
                     boxes.append([xmin, ymin, xmax, ymax])
                     labels.append(self.label_map[name])
 
-        target = {"boxes": torch.as_tensor(boxes, dtype=torch.float32),
-                  "labels": torch.as_tensor(labels, dtype=torch.int64)}
+        # --- THE FIX ---
+        # reshape(-1, 4) ensures the tensor is [N, 4] even if N is 0
+        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        labels = torch.as_tensor(labels, dtype=torch.int64)
 
-        # Scaling to 512 for consistent training
+        target = {"boxes": boxes, "labels": labels}
+
         w, h = img.size
         img = img.resize((512, 512))
-        target["boxes"][:, [0, 2]] *= (512.0 / w)
-        target["boxes"][:, [1, 3]] *= (512.0 / h)
+
+        # Only scale if boxes exist to avoid math on empty tensors
+        if boxes.shape[0] > 0:
+            target["boxes"][:, [0, 2]] *= (512.0 / w)
+            target["boxes"][:, [1, 3]] *= (512.0 / h)
 
         img = T.ToTensor()(img)
-        if self.transforms: img, target = self.transforms(img, target)
+        if self.transforms:
+            img, target = self.transforms(img, target)
         return img, target
-
-    def __len__(self):
-        return len(self.imgs)
 
 
 # ==========================================
