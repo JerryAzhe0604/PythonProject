@@ -27,12 +27,10 @@ class DetectionHorizontalFlip:
 
     def __call__(self, img, target):
         if torch.rand(1) < self.p:
-            # Check if Tensor or PIL to get width correctly
             if hasattr(img, 'shape'):
                 width = img.shape[-1]
             else:
                 width, _ = img.size
-
             img = torch.flip(img, dims=[-1]) if hasattr(img, 'shape') else T.RandomHorizontalFlip(p=1.0)(img)
             bbox = target["boxes"]
             bbox[:, [0, 2]] = width - bbox[:, [2, 0]]
@@ -50,20 +48,33 @@ class DetectionNormalize:
 
 
 # ==========================================
-# 2. MULTI-DATASET LOADER
+# 2. MULTI-DATASET LOADER (With Debugger)
 # ==========================================
 class XMLDataset(torch.utils.data.Dataset):
     def __init__(self, roots, transforms=None):
         self.roots = roots if isinstance(roots, list) else [roots]
         self.transforms = transforms
         self.imgs = []
+
+        print(f"\n--- PATH DEBUGGER ---")
+        print(f"Working Directory: {os.getcwd()}")
+
         for root in self.roots:
+            full_path = os.path.abspath(root)
+            print(f"Scanning: {full_path}")
+            if not os.path.exists(root):
+                print(f"!! ERROR: Folder not found: {root}")
+                continue
+
             for r, d, f in os.walk(root):
                 for file in f:
-                    if file.endswith('.jpg'):
+                    # Catch .jpg, .JPG, .jpeg, .png
+                    if file.lower().endswith(('.jpg', '.jpeg', '.png')):
                         self.imgs.append(os.path.join(r, file))
 
-        # Universal Map: Covers Roboflow and Original formats
+        print(f"Total Images Found: {len(self.imgs)}")
+        print(f"----------------------\n")
+
         self.label_map = {
             'license-plate': 1, 'plate': 1, 'car': 2, 'vehicle': 2,
             'perodua': 3, 'proton': 4, 'honda': 5, 'toyota': 6,
@@ -72,7 +83,7 @@ class XMLDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_path = self.imgs[idx]
-        xml_path = img_path.replace('.jpg', '.xml')
+        xml_path = img_path.rsplit('.', 1)[0] + '.xml'
         img = Image.open(img_path).convert("RGB")
         img = ImageOps.autocontrast(img)
 
@@ -90,9 +101,8 @@ class XMLDataset(torch.utils.data.Dataset):
                         boxes.append([xmin, ymin, xmax, ymax])
                         labels.append(self.label_map[name])
         except:
-            return self.__getitem__((idx + 1) % len(self))  # Skip broken files
+            return self.__getitem__((idx + 1) % len(self))
 
-        # The [N, 4] Reshape Fix
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         labels = torch.as_tensor(labels, dtype=torch.int64)
         target = {"boxes": boxes, "labels": labels}
@@ -116,63 +126,62 @@ class XMLDataset(torch.utils.data.Dataset):
 # ==========================================
 def create_ssd512(num_classes):
     backbone = nn.Sequential(*list(vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features)[:30])
-
     anchor_gen = DefaultBoxGenerator(
         [[2], [2, 3], [2, 3], [2, 3], [2], [2], [2]],
         scales=[0.04, 0.1, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06, 1.20],
         steps=[8, 16, 32, 64, 128, 256, 512]
     )
-
     head = SSDHead([512, 1024, 512, 256, 256, 256, 256], [4, 6, 6, 6, 4, 4, 4], num_classes)
     return SSD(backbone, anchor_gen, (512, 512), num_classes, head=head)
 
 
 # ==========================================
-# 4. HIGH-PERFORMANCE TRAINING LOOP
+# 4. TRAINING EXECUTION
 # ==========================================
 if __name__ == "__main__":
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = create_ssd512(num_classes=11).to(DEVICE)
 
-    # High-performance AdamW (Faster convergence)
+    # AdamW at 0.001 is best for fast learning on good hardware
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
     scaler = torch.cuda.amp.GradScaler()
 
-    # Paths from your file structure
+    # --- SET PATHS HERE ---
+    # Using 'r' for Windows paths to avoid backslash issues
     train_folders = [
-        "dataset/Car Brands.v3-carbrands.voc/train",
-        "dataset/Car Models.v2-carobject.voc/train"
+        r"dataset/Car Brands.v3-carbrands.voc/train",
+        r"dataset/Car Models.v2-carobject.voc/train"
     ]
 
     dataset = XMLDataset(train_folders,
                          transforms=DetectionCompose([DetectionHorizontalFlip(), DetectionNormalize()]))
 
-    # num_workers=0 is best for Windows/Anaconda stability
+    # batch_size=8 is safe for most 8GB+ GPUs
     loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True,
                                          collate_fn=lambda b: tuple(zip(*b)), num_workers=0)
 
-    print(f"--- TRAINING START: {len(dataset)} images from 2 datasets ---")
+    if len(dataset) == 0:
+        print("!! TERMINATING: No images found. Check your train_folders paths.")
+    else:
+        print(f"--- TRAINING START on {DEVICE} ---")
+        for epoch in range(50):
+            model.train()
+            epoch_loss = 0
+            for images, targets in loader:
+                images = [img.to(DEVICE) for img in images]
+                targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-    for epoch in range(50):
-        model.train()
-        epoch_loss = 0
-        for images, targets in loader:
-            images = [img.to(DEVICE) for img in images]
-            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+                with torch.cuda.amp.autocast():
+                    loss_dict = model(images, targets)
+                    loss = sum(l for l in loss_dict.values())
 
-            with torch.cuda.amp.autocast():
-                loss_dict = model(images, targets)
-                loss = sum(l for l in loss_dict.values())
+                if not torch.isfinite(loss): continue
 
-            if not torch.isfinite(loss): continue
+                optimizer.zero_grad()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer);
+                scaler.update()
+                epoch_loss += loss.item()
 
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-            scaler.step(optimizer);
-            scaler.update()
-            epoch_loss += loss.item()
-
-        print(f"Epoch {epoch + 1} | Loss: {epoch_loss / len(loader):.4f}")
-        torch.save(model.state_dict(), "malaysian_ssd512_RESCUE.pth")
-
-    print("--- TRAINING COMPLETE: Weights saved to malaysian_ssd512_RESCUE.pth ---")
+            print(f"Epoch {epoch + 1} | Loss: {epoch_loss / len(loader):.4f}")
+            torch.save(model.state_dict(), "malaysian_ssd512_RESCUE.pth")
