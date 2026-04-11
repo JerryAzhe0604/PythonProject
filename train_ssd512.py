@@ -26,8 +26,8 @@ class DetectionHorizontalFlip:
 
     def __call__(self, img, target):
         if torch.rand(1) < self.p:
-            width, _ = img.size
-            img = T.RandomHorizontalFlip(p=1.0)(img)
+            _, height, width = img.shape  # Corrected for Tensors
+            img = torch.flip(img, dims=[-1])
             bbox = target["boxes"]
             bbox[:, [0, 2]] = width - bbox[:, [2, 0]]
             target["boxes"] = bbox
@@ -98,30 +98,26 @@ class XMLDataset(torch.utils.data.Dataset):
 # ==============================
 def create_ssd512(num_classes):
     backbone = nn.Sequential(*list(vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features)[:30])
-
     anchor_gen = DefaultBoxGenerator(
-        [[2], [2, 3], [2, 3], [2, 3], [2], [2], [2]],  # Anchors synced to your app.py
+        [[2], [2, 3], [2, 3], [2, 3], [2], [2], [2]],
         scales=[0.04, 0.1, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06],
         steps=[8, 16, 32, 64, 128, 256, 512]
     )
-
     head = SSDHead(
         [512, 1024, 512, 256, 256, 256, 256],
-        [4, 6, 6, 6, 4, 4, 4],  # Matches the 44-param mismatch fix
+        [4, 6, 6, 6, 4, 4, 4],
         num_classes
     )
     return SSD(backbone, anchor_gen, (512, 512), num_classes, head=head)
 
 
 # ==============================
-# 4. LOOP (FIXED SYNTAX)
+# 4. TRAINING LOOP
 # ==============================
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model = create_ssd512(num_classes=11).to(DEVICE)
 optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
-
-# FIXED: Reverted to old syntax for compatibility
-scaler = torch.cuda.amp.GradScaler()
+scaler = torch.cuda.amp.GradScaler()  # Version-safe
 
 dataset = XMLDataset('dataset/sorted_train',
                      transforms=DetectionCompose([DetectionHorizontalFlip(), DetectionNormalize()]))
@@ -135,8 +131,7 @@ for epoch in range(50):
         images = [img.to(DEVICE) for img in images]
         targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-        # FIXED: Reverted to old syntax for compatibility
-        with torch.cuda.amp.autocast():
+        with torch.cuda.amp.autocast():  # Version-safe
             loss_dict = model(images, targets)
             loss = sum(l for l in loss_dict.values())
 
