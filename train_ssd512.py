@@ -131,7 +131,7 @@ def create_ssd512(num_classes):
 # ==========================================
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model = create_ssd512(num_classes=11).to(DEVICE)
-optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=0.0005)
 
 # Version-safe settings for Anaconda environments
 scaler = torch.cuda.amp.GradScaler()
