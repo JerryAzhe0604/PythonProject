@@ -11,7 +11,7 @@ from torchvision import transforms as T
 
 
 # ==============================
-# 1. TRANSFORMS
+# 1. TRANSFORMS (Fixed for Tensors)
 # ==============================
 class DetectionCompose:
     def __init__(self, transforms): self.transforms = transforms
@@ -26,9 +26,12 @@ class DetectionHorizontalFlip:
 
     def __call__(self, img, target):
         if torch.rand(1) < self.p:
-            _, height, width = img.shape  # Corrected for Tensors
+            # img is a Tensor [C, H, W]
+            width = img.shape[-1]
+            # Use functional flip for Tensors
             img = torch.flip(img, dims=[-1])
             bbox = target["boxes"]
+            # x_new = width - x_old
             bbox[:, [0, 2]] = width - bbox[:, [2, 0]]
             target["boxes"] = bbox
         return img, target
@@ -85,7 +88,7 @@ class XMLDataset(torch.utils.data.Dataset):
         target["boxes"][:, [0, 2]] *= (512.0 / w)
         target["boxes"][:, [1, 3]] *= (512.0 / h)
 
-        img = T.ToTensor()(img)
+        img = T.ToTensor()(img)  # Convert to Tensor here
         if self.transforms: img, target = self.transforms(img, target)
         return img, target
 
@@ -97,15 +100,18 @@ class XMLDataset(torch.utils.data.Dataset):
 # 3. ARCHITECTURE SYNC
 # ==============================
 def create_ssd512(num_classes):
+    # Slice VGG16 features at layer 30
     backbone = nn.Sequential(*list(vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features)[:30])
+
     anchor_gen = DefaultBoxGenerator(
         [[2], [2, 3], [2, 3], [2, 3], [2], [2], [2]],
         scales=[0.04, 0.1, 0.26, 0.42, 0.58, 0.74, 0.9, 1.06],
         steps=[8, 16, 32, 64, 128, 256, 512]
     )
+
     head = SSDHead(
         [512, 1024, 512, 256, 256, 256, 256],
-        [4, 6, 6, 6, 4, 4, 4],
+        [4, 6, 6, 6, 4, 4, 4],  # Matches the 44-param mismatch fix for your app
         num_classes
     )
     return SSD(backbone, anchor_gen, (512, 512), num_classes, head=head)
@@ -117,7 +123,9 @@ def create_ssd512(num_classes):
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model = create_ssd512(num_classes=11).to(DEVICE)
 optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
-scaler = torch.cuda.amp.GradScaler()  # Version-safe
+
+# Version-safe Scaler for older PyTorch
+scaler = torch.cuda.amp.GradScaler()
 
 dataset = XMLDataset('dataset/sorted_train',
                      transforms=DetectionCompose([DetectionHorizontalFlip(), DetectionNormalize()]))
@@ -131,7 +139,7 @@ for epoch in range(50):
         images = [img.to(DEVICE) for img in images]
         targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-        with torch.cuda.amp.autocast():  # Version-safe
+        with torch.cuda.amp.autocast():  # Version-safe Autocast
             loss_dict = model(images, targets)
             loss = sum(l for l in loss_dict.values())
 
@@ -146,6 +154,7 @@ for epoch in range(50):
         epoch_loss += loss.item()
 
     print(f"Epoch {epoch + 1} | Loss: {epoch_loss / len(loader):.4f}")
+    # Save the file name your app.py is looking for
     torch.save(model.state_dict(), "malaysian_ssd512_RESCUE.pth")
 
 print("Training Done!")
