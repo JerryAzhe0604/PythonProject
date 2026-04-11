@@ -32,7 +32,9 @@ class XMLDataset(torch.utils.data.Dataset):
             root = tree.getroot()
             boxes, labels = [], []
             for obj in root.findall('object'):
-                name = obj.find('name').text.lower().strip()
+                name = obj.find('name').text
+                print(f"DEBUG: Found object named '{name}' in XML")  # ADD THIS LINE
+                name = name.lower().strip()
                 if name in self.label_map:
                     bnd = obj.find('bndbox')
                     xmin, ymin = float(bnd.find('xmin').text), float(bnd.find('ymin').text)
