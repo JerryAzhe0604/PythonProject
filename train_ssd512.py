@@ -48,7 +48,7 @@ class DetectionNormalize:
 
 
 # ==========================================
-# 2. MULTI-DATASET LOADER (With Debugger)
+# 2. MULTI-DATASET LOADER (Handles 3 Datasets)
 # ==========================================
 class XMLDataset(torch.utils.data.Dataset):
     def __init__(self, roots, transforms=None):
@@ -57,26 +57,24 @@ class XMLDataset(torch.utils.data.Dataset):
         self.imgs = []
 
         print(f"\n--- PATH DEBUGGER ---")
-        print(f"Working Directory: {os.getcwd()}")
-
         for root in self.roots:
             full_path = os.path.abspath(root)
-            print(f"Scanning: {full_path}")
             if not os.path.exists(root):
-                print(f"!! ERROR: Folder not found: {root}")
+                print(f"!! WARNING: Folder not found, skipping: {root}")
                 continue
-
+            print(f"Adding Data From: {full_path}")
             for r, d, f in os.walk(root):
                 for file in f:
-                    # Catch .jpg, .JPG, .jpeg, .png
                     if file.lower().endswith(('.jpg', '.jpeg', '.png')):
                         self.imgs.append(os.path.join(r, file))
 
-        print(f"Total Images Found: {len(self.imgs)}")
+        print(f"Total Combined Training Images: {len(self.imgs)}")
         print(f"----------------------\n")
 
+        # Map for ALL datasets
         self.label_map = {
-            'license-plate': 1, 'plate': 1, 'car': 2, 'vehicle': 2,
+            'plate': 1, 'license-plate': 1,  # ID 1 (Plates)
+            'car': 2, 'vehicle': 2,  # ID 2 (Cars)
             'perodua': 3, 'proton': 4, 'honda': 5, 'toyota': 6,
             'mercedes': 7, 'bmw': 8, 'nissan': 9, 'others': 10
         }
@@ -122,7 +120,7 @@ class XMLDataset(torch.utils.data.Dataset):
 
 
 # ==========================================
-# 3. SYNCED ARCHITECTURE
+# 3. ARCHITECTURE (Fixed for NMS and Sync)
 # ==========================================
 def create_ssd512(num_classes):
     backbone = nn.Sequential(*list(vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features)[:30])
@@ -136,32 +134,29 @@ def create_ssd512(num_classes):
 
 
 # ==========================================
-# 4. TRAINING EXECUTION
+# 4. TRIPLE-DATASET TRAINING
 # ==========================================
 if __name__ == "__main__":
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = create_ssd512(num_classes=11).to(DEVICE)
-
-    # AdamW at 0.001 is best for fast learning on good hardware
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
     scaler = torch.cuda.amp.GradScaler()
 
-    # --- SET PATHS HERE ---
-    # Using 'r' for Windows paths to avoid backslash issues
+    # --- ADD ALL THREE FOLDERS HERE ---
     train_folders = [
-        r"dataset/Car Brands.v3-carbrands.voc/train",
-        r"dataset/Car Models.v2-carobject.voc/train"
+        r"Car Brands.v3-carbrands.voc/train",  # New Brand Dataset
+        r"Car Models.v2-carobject.voc/train",  # New Object Dataset
+        r"sorted_train"  # Your OLD Plate Dataset (Update this path if needed)
     ]
 
     dataset = XMLDataset(train_folders,
                          transforms=DetectionCompose([DetectionHorizontalFlip(), DetectionNormalize()]))
 
-    # batch_size=8 is safe for most 8GB+ GPUs
     loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True,
                                          collate_fn=lambda b: tuple(zip(*b)), num_workers=0)
 
     if len(dataset) == 0:
-        print("!! TERMINATING: No images found. Check your train_folders paths.")
+        print("!! TERMINATING: No images found. Check folder paths in train_folders.")
     else:
         print(f"--- TRAINING START on {DEVICE} ---")
         for epoch in range(50):
