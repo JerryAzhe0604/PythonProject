@@ -43,7 +43,7 @@ LABEL_MAP = {
     6:'TOYOTA', 7:'MERCEDES', 8:'BMW', 9:'NISSAN', 10:'OTHERS'
 }
 
-img_path = "dataset/test/sample.jpg"
+img_path = "dataset/test/IMG_6002.jpg"
 img_pil = Image.open(img_path).convert("RGB")
 cv_img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 img_tensor = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
