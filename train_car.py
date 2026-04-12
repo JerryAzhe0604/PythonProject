@@ -24,41 +24,72 @@ class XMLDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_path = self.imgs[idx]
+        # This assumes .jpg and .xml are in the same folder
         xml_path = img_path.rsplit('.', 1)[0] + '.xml'
+
+        print(f"\nDEBUG: Processing image {idx}: {os.path.basename(img_path)}")
+
+        if not os.path.exists(xml_path):
+            print(f"!! ERROR: XML NOT FOUND at {xml_path}")
+            return self.__getitem__((idx + 1) % len(self))
+
         img = Image.open(img_path).convert("RGB")
         img = ImageOps.autocontrast(img)
+
         try:
-            tree = ET.parse(xml_path);
+            tree = ET.parse(xml_path)
             root = tree.getroot()
             boxes, labels = [], []
-            for obj in root.findall('object'):
-                name = obj.find('name').text
-                print(f"DEBUG: Found object named '{name}' in XML")  # ADD THIS LINE
-                name = name.lower().strip()
-                if name in self.label_map:
-                    bnd = obj.find('bndbox')
-                    xmin, ymin = float(bnd.find('xmin').text), float(bnd.find('ymin').text)
-                    xmax, ymax = float(bnd.find('xmax').text), float(bnd.find('ymax').text)
-                    if xmax > xmin and ymax > ymin:
-                        boxes.append([xmin, ymin, xmax, ymax])
-                        labels.append(self.label_map[name])
-        except:
+
+            objects = root.findall('object')
+            print(f"DEBUG: Found {len(objects)} total objects in XML")
+
+            for obj in objects:
+                name_tag = obj.find('name')
+                if name_tag is not None:
+                    name = name_tag.text.lower().strip()
+                    print(f"DEBUG: Object name in XML: '{name}'")
+
+                    if name in self.label_map:
+                        bnd = obj.find('bndbox')
+                        xmin = float(bnd.find('xmin').text)
+                        ymin = float(bnd.find('ymin').text)
+                        xmax = float(bnd.find('xmax').text)
+                        ymax = float(bnd.find('ymax').text)
+
+                        if xmax > xmin and ymax > ymin:
+                            boxes.append([xmin, ymin, xmax, ymax])
+                            labels.append(self.label_map[name])
+                            print(f"  -> SUCCESS: Match found for '{name}' (ID: {self.label_map[name]})")
+                        else:
+                            print(f"  -> SKIP: Invalid box size for '{name}'")
+                    else:
+                        print(f"  -> SKIP: '{name}' is not in your l_map")
+
+            if len(boxes) == 0:
+                print("!! WARNING: Image has 0 valid boxes. SSD will have 0 loss.")
+                # Optional: return the next image so we only train on valid data
+                # return self.__getitem__((idx + 1) % len(self))
+
+        except Exception as e:
+            print(f"!! CRITICAL XML ERROR: {e}")
             return self.__getitem__((idx + 1) % len(self))
+
+        # Tensor conversion
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         labels = torch.as_tensor(labels, dtype=torch.int64)
         target = {"boxes": boxes, "labels": labels}
+
         w, h = img.size
         img = img.resize((512, 512))
         if boxes.shape[0] > 0:
             target["boxes"][:, [0, 2]] *= (512.0 / w)
             target["boxes"][:, [1, 3]] *= (512.0 / h)
+
         img = T.ToTensor()(img)
         if self.transforms:
             img = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(img)
         return img, target
-
-    def __len__(self):
-        return len(self.imgs)
 
 
 def create_ssd512(num_classes):
