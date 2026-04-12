@@ -60,4 +60,4 @@ def evaluate_brand(model_path, test_folder, label_map, conf_threshold=0.2):
 if __name__ == "__main__":
     # Updated to your 1-5 Diagnostic list
     BRAND_MAP = {'honda': 1, 'nissan': 2, 'perodua': 3, 'proton': 4, 'toyota': 5}
-    evaluate_brand("ssd512_brands.pth", r"dataset/Car-Brands.voc/valid", BRAND_MAP)
+    evaluate_brand("ssd512_brands.pth", r"dataset/Car Brands.v3-carbrands.voc/valid", BRAND_MAP)
