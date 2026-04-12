@@ -140,9 +140,11 @@ if __name__ == "__main__":
 
     # --- UNIVERSAL CAR MAP (Catching all possible names) ---
     l_map = {
-        'car': 2, 'vehicle': 2, 'automobile': 2,
-        'perodua': 2, 'proton': 2, 'honda': 2, 'toyota': 2,
-        'mercedes': 2, 'bmw': 2, 'nissan': 2, 'others': 2
+        'cars': 2,  # Matches <name>Cars</name> after .lower()
+        'car': 2,  # Safety for other datasets
+        'vehicle': 2,  # Safety for other datasets
+        'license-plate': 1,
+        'plate': 1
     }
 
     dataset = XMLDataset(train_folders, l_map, transforms=True)
