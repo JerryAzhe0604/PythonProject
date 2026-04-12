@@ -11,7 +11,7 @@ from torchvision import transforms as T
 
 
 # ==========================================
-# 1. MULTI-DATASET LOADER (Specialist Edition)
+# 1. STREAMLINED DATA LOADER
 # ==========================================
 class XMLDataset(torch.utils.data.Dataset):
     def __init__(self, roots, label_map, transforms=None):
@@ -20,30 +20,20 @@ class XMLDataset(torch.utils.data.Dataset):
         self.label_map = label_map
         self.imgs = []
 
-        print(f"\n--- PATH DEBUGGER ---")
         for root in self.roots:
-            full_path = os.path.abspath(root)
-            if not os.path.exists(root):
-                print(f"!! WARNING: Folder not found: {full_path}")
-                continue
-            print(f"Scanning folder: {full_path}")
-            for r, d, f in os.walk(root):
-                for file in f:
-                    if file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                        self.imgs.append(os.path.join(r, file))
+            if os.path.exists(root):
+                for r, d, f in os.walk(root):
+                    for file in f:
+                        if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                            self.imgs.append(os.path.join(r, file))
 
-        print(f"Total Images Found: {len(self.imgs)}")
-        print(f"----------------------\n")
+        print(f"--- Dataset Ready: {len(self.imgs)} images loaded ---")
 
     def __getitem__(self, idx):
         img_path = self.imgs[idx]
         xml_path = img_path.rsplit('.', 1)[0] + '.xml'
 
-        # --- DEBUG PRINT FOR EACH IMAGE ---
-        print(f"DEBUG: Processing {os.path.basename(img_path)}")
-
         if not os.path.exists(xml_path):
-            print(f"  !! ERROR: XML missing for {os.path.basename(img_path)}")
             return self.__getitem__((idx + 1) % len(self))
 
         img = Image.open(img_path).convert("RGB")
@@ -55,31 +45,19 @@ class XMLDataset(torch.utils.data.Dataset):
             boxes, labels = [], []
 
             for obj in root.findall('object'):
-                name_tag = obj.find('name')
-                if name_tag is not None:
-                    name = name_tag.text.lower().strip()
-
-                    if name in self.label_map:
-                        bnd = obj.find('bndbox')
-                        xmin = float(bnd.find('xmin').text)
-                        ymin = float(bnd.find('ymin').text)
-                        xmax = float(bnd.find('xmax').text)
-                        ymax = float(bnd.find('ymax').text)
-
-                        if xmax > xmin and ymax > ymin:
-                            boxes.append([xmin, ymin, xmax, ymax])
-                            labels.append(self.label_map[name])
-                            print(f"  -> Match Found: '{name}' (ID: {self.label_map[name]})")
-                        else:
-                            print(f"  -> Skipping: Invalid box size for '{name}'")
-                    else:
-                        print(f"  -> Skipping: '{name}' is not in your l_map")
+                name = obj.find('name').text.lower().strip()
+                if name in self.label_map:
+                    bnd = obj.find('bndbox')
+                    xmin, ymin = float(bnd.find('xmin').text), float(bnd.find('ymin').text)
+                    xmax, ymax = float(bnd.find('xmax').text), float(bnd.find('ymax').text)
+                    if xmax > xmin and ymax > ymin:
+                        boxes.append([xmin, ymin, xmax, ymax])
+                        labels.append(self.label_map[name])
 
             if len(boxes) == 0:
-                print(f"  !! WARNING: 0 objects found in {os.path.basename(xml_path)}")
+                return self.__getitem__((idx + 1) % len(self))
 
-        except Exception as e:
-            print(f"!! XML READ ERROR: {e}")
+        except:
             return self.__getitem__((idx + 1) % len(self))
 
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
@@ -88,9 +66,8 @@ class XMLDataset(torch.utils.data.Dataset):
 
         w, h = img.size
         img = img.resize((512, 512))
-        if boxes.shape[0] > 0:
-            target["boxes"][:, [0, 2]] *= (512.0 / w)
-            target["boxes"][:, [1, 3]] *= (512.0 / h)
+        target["boxes"][:, [0, 2]] *= (512.0 / w)
+        target["boxes"][:, [1, 3]] *= (512.0 / h)
 
         img = T.ToTensor()(img)
         if self.transforms:
@@ -102,7 +79,7 @@ class XMLDataset(torch.utils.data.Dataset):
 
 
 # ==========================================
-# 2. ARCHITECTURE (Must match app.py)
+# 2. SSD512 ARCHITECTURE
 # ==========================================
 def create_ssd512(num_classes):
     vgg = vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features
@@ -125,54 +102,41 @@ def create_ssd512(num_classes):
 
 
 # ==========================================
-# 3. TRAINING EXECUTION
+# 3. FAST TRAINING LOOP
 # ==========================================
 if __name__ == "__main__":
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = create_ssd512(num_classes=11).to(DEVICE)
 
-    # Using SGD with a lower learning rate for stability (Prevents Box Soup)
+    # SGD at 0.0001 is the "Safest" for SSD stability
     optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
     scaler = torch.cuda.amp.GradScaler()
 
-    # --- PATHS (Update if needed) ---
+    # --- PATHS & MAP ---
     train_folders = [r"Car Models.v2-carobject.voc/train"]
-
-    # --- UNIVERSAL CAR MAP (Catching all possible names) ---
-    l_map = {
-        'cars': 2,  # Matches <name>Cars</name> after .lower()
-        'car': 2,  # Safety for other datasets
-        'vehicle': 2,  # Safety for other datasets
-        'license-plate': 1,
-        'plate': 1
-    }
+    l_map = {'cars': 2, 'car': 2, 'vehicle': 2}
 
     dataset = XMLDataset(train_folders, l_map, transforms=True)
     loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True,
                                          collate_fn=lambda b: tuple(zip(*b)), num_workers=0)
 
-    if len(dataset) == 0:
-        print("!! TERMINATING: No images found. Check folder paths.")
-    else:
-        print(f"--- TRAINING START on {DEVICE} ---")
-        for epoch in range(50):
-            model.train()
-            epoch_loss = 0
-            for images, targets in loader:
-                images = [img.to(DEVICE) for img in images]
-                targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+    print(f"--- STARTING SPECIALIST TRAINING ON {DEVICE} ---")
+    for epoch in range(50):
+        model.train()
+        epoch_loss = 0
+        for images, targets in loader:
+            images = [img.to(DEVICE) for img in images]
+            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-                with torch.cuda.amp.autocast():
-                    loss_dict = model(images, targets)
-                    loss = sum(l for l in loss_dict.values())
+            with torch.cuda.amp.autocast():
+                loss_dict = model(images, targets)
+                loss = sum(l for l in loss_dict.values())
 
-                if not torch.isfinite(loss): continue
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            epoch_loss += loss.item()
 
-                optimizer.zero_grad()
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                epoch_loss += loss.item()
-
-            print(f"Epoch {epoch + 1} | Loss: {epoch_loss / len(loader):.4f}")
-            torch.save(model.state_dict(), "car_specialist.pth")
+        print(f"Epoch {epoch + 1}/50 | Average Loss: {epoch_loss / len(loader):.4f}")
+        torch.save(model.state_dict(), "car_specialist.pth")
