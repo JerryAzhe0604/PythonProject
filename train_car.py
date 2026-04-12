@@ -108,16 +108,18 @@ if __name__ == "__main__":
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = create_ssd512(num_classes=11).to(DEVICE)
 
-    # SGD at 0.0001 is the "Safest" for SSD stability
     optimizer = torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=0.0005)
-    scaler = torch.cuda.amp.GradScaler()
 
-    # --- PATHS & MAP ---
+    # --- UPDATED SYNTAX ---
+    scaler = torch.amp.GradScaler('cuda')
+
     train_folders = [r"Car Models.v2-carobject.voc/train"]
     l_map = {'cars': 2, 'car': 2, 'vehicle': 2}
 
     dataset = XMLDataset(train_folders, l_map, transforms=True)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True,
+
+    # --- LOWER BATCH SIZE FOR MEMORY ---
+    loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True,
                                          collate_fn=lambda b: tuple(zip(*b)), num_workers=0)
 
     print(f"--- STARTING SPECIALIST TRAINING ON {DEVICE} ---")
@@ -128,7 +130,8 @@ if __name__ == "__main__":
             images = [img.to(DEVICE) for img in images]
             targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-            with torch.cuda.amp.autocast():
+            # --- UPDATED SYNTAX ---
+            with torch.amp.autocast('cuda'):
                 loss_dict = model(images, targets)
                 loss = sum(l for l in loss_dict.values())
 
